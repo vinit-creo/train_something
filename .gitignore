@@ -8,7 +8,10 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+kaggle.json
 build/
+data/
+train_project/
 develop-eggs/
 dist/
 downloads/
