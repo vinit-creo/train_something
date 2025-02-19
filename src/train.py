@@ -1,96 +1,96 @@
 import os
-import pandas as pd
 import torch
-import kagglehub
-from transformers import (
-    AutoTokenizer,
-    AutoModelForQuestionAnswering,
-    TrainingArguments,
-    Trainer,
-    DefaultDataCollator
-)
-from datasets import Dataset
-import kaggle
-from sklearn.model_selection import train_test_split
-from utils import generate_qa_pairs, preprocess_for_qa
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForLanguageModeling
+from datasets import load_dataset
+import logging
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def download_dataset(dataset_name="hk7797/stock-market-india", data_path="./data"):
-    """Download the stock market dataset from Kaggle"""
-    os.makedirs(data_path, exist_ok=True)
-    try:
-        kagglehub.dataset_download(dataset_name,path=data_path,)
-        print(f"Successfully downloaded dataset to {data_path}")
-        return pd.read_csv(os.path.join(data_path, 'STOCK_DATA.csv'))
-    except Exception as e:
-        print(f"Error downloading dataset: {e}")
-        if os.path.exists(os.path.join(data_path, 'STOCK_DATA.csv')):
-            print("Using existing dataset file")
-            return pd.read_csv(os.path.join(data_path, 'STOCK_DATA.csv'))
-        else:
-            raise FileNotFoundError("Dataset file not found. Please check your Kaggle API setup or download the file manually.")
-
-def train_qa_model(model_name="bert-base-uncased", output_dir="./stock_qa_model", 
-                  data_path="./data", num_train_epochs=3, batch_size=8):
-    """Train a question answering model on stock market data"""
+def train_test_model():
+    # Load a very small model and only few examples for testing
+    model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    output_dir = "./prompt_llm_model"
     
-    df = download_dataset(data_path=data_path)
-    
-    qa_dataset = generate_qa_pairs(df)
-    print(f"Generated {len(qa_dataset)} QA pairs")
-    
-    print(f"Loading model: {model_name}")
+    logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForQuestionAnswering.from_pretrained(model_name)
     
-    train_raw, eval_raw = train_test_split(qa_dataset, test_size=0.2, random_state=42)
-    train_dataset = Dataset.from_pandas(pd.DataFrame(train_raw))
-    eval_dataset = Dataset.from_pandas(pd.DataFrame(eval_raw))
-    
-    print("Preprocessing train dataset...")
-    train_dataset = train_dataset.map(
-        lambda examples: preprocess_for_qa(examples, tokenizer),
-        batched=True,
-        remove_columns=train_dataset.column_names
+    logger.info("Loading model...")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float32,
+        low_cpu_mem_usage=True
     )
     
-    print("Preprocessing evaluation dataset...")
-    eval_dataset = eval_dataset.map(
-        lambda examples: preprocess_for_qa(examples, tokenizer),
+    tokenizer.pad_token = tokenizer.eos_token
+    model.config.pad_token_id = tokenizer.eos_token_id
+    
+    logger.info("Loading dataset...")
+    dataset = load_dataset("fka/awesome-chatgpt-prompts")
+    small_dataset = dataset['train'].select(range(10))
+    
+    logger.info("Preparing data...")
+    def format_prompt(examples):
+        prompts = []
+        for act, prompt in zip(examples['act'], examples['prompt']):
+            formatted = f"Act as {act}\n\nPrompt: {prompt}\n\nResponse:"
+            prompts.append(formatted)
+        return {'text': prompts}
+    
+    formatted_dataset = small_dataset.map(
+        format_prompt,
         batched=True,
-        remove_columns=eval_dataset.column_names
+        remove_columns=small_dataset.column_names
     )
     
+    def tokenize_function(examples):
+        return tokenizer(
+            examples['text'],
+            truncation=True,
+            padding='max_length',
+            max_length=128,
+            return_tensors="pt"
+        )
+    
+    tokenized_dataset = formatted_dataset.map(
+        tokenize_function,
+        batched=True,
+        remove_columns=['text']
+    )
+    
+    logger.info("Setting up training...")
     training_args = TrainingArguments(
         output_dir=output_dir,
-        evaluation_strategy="steps",
-        eval_steps=500,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
-        num_train_epochs=num_train_epochs,
-        save_steps=500,
-        logging_steps=100,
-        learning_rate=3e-5,
-        weight_decay=0.01,
-        save_total_limit=2,
+        num_train_epochs=1,  
+        per_device_train_batch_size=2,
+        logging_steps=1,
+        save_strategy="epoch",
+        save_total_limit=1,
+        remove_unused_columns=False
     )
     
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=DefaultDataCollator(),
+        train_dataset=tokenized_dataset,
+        data_collator=DataCollatorForLanguageModeling(
+            tokenizer=tokenizer,
+            mlm=False
+        )
     )
     
+    logger.info("Starting training...")
     trainer.train()
     
+    logger.info("Saving model...")
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
+    logger.info("Test training complete!")
 
 if __name__ == "__main__":
-    download_dataset()
-    MODEL_DIR = "./stock_qa_model"
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    
-    train_qa_model(output_dir=MODEL_DIR)
+    try:
+        train_test_model()
+    except Exception as e:
+        logger.error(f"Training failed with error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())

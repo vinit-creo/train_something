@@ -1,113 +1,62 @@
-import os
 import torch
-from transformers import AutoTokenizer, AutoModelForQuestionAnswering
-import pandas as pd
-from utils import get_context_for_date_symbol
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-class StockMarketQA:
-    def __init__(self, model_path="./stock_qa_model", data_path="./data"):
-        """Initialize the QA system with the trained model"""
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model directory {model_path} not found. Make sure to train the model first.")
-        
+class PromptInference:
+    def __init__(self, model_path="./prompt_llm_model"):
+        """Initialize with the trained model"""
+        print("Loading model and tokenizer...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-        self.model = AutoModelForQuestionAnswering.from_pretrained(model_path)
-        self.model.eval()  # Set to evaluation mode
-        
-        self.data_path = data_path
-        self.df = pd.read_csv(os.path.join(data_path, 'STOCK_DATA.csv'))
-        print(f"Loaded stock data with {len(self.df)} entries")
-        
-        self.dates = sorted(self.df['Date'].unique())
-        self.symbols = sorted(self.df['Symbol'].unique())
-        
-    def answer_question(self, question, context):
-        """Get answer for a specific question"""
-        inputs = self.tokenizer(
-            question,
-            context,
-            return_tensors="pt",
-            max_length=384,
-            truncation=True,
-            padding="max_length"
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=True
         )
-
+        self.model.eval()
+        
+    def generate_response(self, act, prompt, max_length=200):
+        """Generate a response for a given prompt"""
+        input_text = f"Act as {act}\n\nPrompt: {prompt}\n\nResponse:"
+        
+        inputs = self.tokenizer(input_text, return_tensors="pt", padding=True)
+        
         with torch.no_grad():
-            outputs = self.model(**inputs)
-
-        answer_start = torch.argmax(outputs.start_logits)
-        answer_end = torch.argmax(outputs.end_logits)
+            outputs = self.model.generate(
+                inputs.input_ids,
+                max_length=max_length,
+                temperature=0.7,
+                top_p=0.95,
+                repetition_penalty=1.1,
+                num_return_sequences=1,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
         
-        if answer_end < answer_start:
-            answer_end = answer_start
-        
-        tokens = self.tokenizer.convert_ids_to_tokens(
-            inputs["input_ids"][0][answer_start:answer_end+1]
-        )
-        
-        answer = self.tokenizer.convert_tokens_to_string(tokens)
-        
-        answer = answer.strip()
-        
-        # If answer is empty or just punctuation/special chars, return "No answer found"
-        if not answer or all(c in '.,!?;:()[]{}<>-' for c in answer):
-            return "No answer found in the context"
-        
-        return answer
-
-    def get_available_dates(self, n=5):
-        """Return a sample of available dates"""
-        return self.dates[:n]
-    
-    def get_available_symbols(self, n=5):
-        """Return a sample of available symbols"""
-        return self.symbols[:n]
+        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response = response.replace(input_text, "").strip()
+        return response
 
 def main():
-    try:
-        qa_system = StockMarketQA()
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        print("Please run train.py first to train the model.")
-        return
+    print("Initializing model (this might take a moment)...")
+    model = PromptInference()
     
-    sample_dates = qa_system.get_available_dates()
-    sample_symbols = qa_system.get_available_symbols()
-    
-    print("\nStock Market QA System (type 'exit' to quit)")
-    print(f"Sample dates: {', '.join(sample_dates)}")
-    print(f"Sample symbols: {', '.join(sample_symbols)}")
-    print("Full list available in STOCK_DATA.csv")
+    print("\nPrompt Interface (type 'exit' to quit)")
+    print("You can specify a role and prompt for the AI to respond to.")
     
     while True:
-        date = input("\nEnter date (YYYY-MM-DD): ")
-        if date.lower() == 'exit':
+        print("\n" + "="*50)
+        act = input("\nEnter the role (e.g., 'Life Coach', 'Accountant'): ")
+        if act.lower() == 'exit':
             break
             
-        symbol = input("Enter stock symbol (e.g., TCS, RELIANCE): ")
-        if symbol.lower() == 'exit':
+        prompt = input("Enter your prompt: ")
+        if prompt.lower() == 'exit':
             break
-            
-        question = input("Enter your question: ")
-        if question.lower() == 'exit':
-            break
-
+        
         try:
-            context = get_context_for_date_symbol(qa_system.df, date, symbol)
-            if context:
-                answer = qa_system.answer_question(question, context)
-                
-                print("\nContext:", context)
-                print("Question:", question)
-                print("Answer:", answer)
-            else:
-                print(f"No data found for {symbol} on {date}")
-                print(f"Available dates: {', '.join(qa_system.get_available_dates())}")
-                print(f"Available symbols: {', '.join(qa_system.get_available_symbols())}")
-            
+            print("\nGenerating response...\n")
+            response = model.generate_response(act, prompt)
+            print("Response:", response)
         except Exception as e:
-            print(f"Error: {e}")
-            print("Please check if the date and symbol are correct.")
+            print(f"Error generating response: {e}")
 
 if __name__ == "__main__":
     main()
