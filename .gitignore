@@ -12,6 +12,8 @@ kaggle.json
 build/
 data/
 train_project/
+train_something/
+*.setup.sh
 develop-eggs/
 dist/
 downloads/

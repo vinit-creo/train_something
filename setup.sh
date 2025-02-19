@@ -25,9 +25,3 @@ echo "Requirements installed"
 # Create README.md
 touch README.md
 
-echo "Project structure created successfully!"
-echo "Next steps:"
-echo "1. Paste the code into each file"
-echo "2. Install requirements: pip install -r requirements.txt"
-echo "3. Set up Kaggle API credentials"
-echo "4. Run the training script: python src/train.py"

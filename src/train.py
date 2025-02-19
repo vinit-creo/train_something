@@ -51,11 +51,11 @@ def train_test_model():
             max_length=128,
             return_tensors="pt"
         )
-    
+    # code is failing here 
     tokenized_dataset = formatted_dataset.map(
         tokenize_function,
         batched=True,
-        remove_columns=['text']
+        remove_columns=['text'],
     )
     
     logger.info("Setting up training...")
