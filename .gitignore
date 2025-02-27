@@ -13,6 +13,8 @@ build/
 data/
 train_project/
 develop-eggs/
+/llama3-insurance-model
+/llama-insurance-model
 prompt_llm_model/
 dist/
 downloads/
