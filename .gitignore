@@ -13,6 +13,7 @@ build/
 data/
 train_project/
 develop-eggs/
+prompt_llm_model/
 dist/
 downloads/
 eggs/
